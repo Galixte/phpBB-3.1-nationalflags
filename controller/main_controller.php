@@ -10,7 +10,7 @@
 
 namespace rmcgirr83\nationalflags\controller;
 
-use Symfony\Component\HttpFoundation\Response;
+use phpbb\exception\http_exception;
 
 /**
 * Main controller
@@ -19,9 +19,6 @@ class main_controller
 {
 	/** @var \phpbb\auth\auth */
 	protected $auth;
-
-	/** @var \phpbb\cache\service */
-	protected $cache;
 
 	/** @var \phpbb\config\config */
 	protected $config;
@@ -64,31 +61,35 @@ class main_controller
 	protected $flags_table;
 
 	/* @var \rmcgirr83\nationalflags\core\nationalflags */
-	protected $functions;
+	protected $nationalflags;
+
+	/** @var \phpbb\files\factory */
+	protected $files_factory;
+
+	const MAX_SIZE = 30; // Max size img
 
 	/**
 	* Constructor
 	*
 	* @param \phpbb\auth\auth					$auth			Auth object
-	* @param \phpbb\cache\service				$cache			Cache object
 	* @param \phpbb\config\config               $config         Config object
 	* @param \phpbb\db\driver\driver			$db				Database object
 	* @param \phpbb\pagination					$pagination		Pagination object
 	* @param \phpbb\controller\helper           $helper         Controller helper object
 	* @param \phpbb\request\request				$request		Request object
-	* @param \phpbb\extension\manager			$ext_manager		Extension manager object
+	* @param \phpbb\extension\manager			$ext_manager	Extension manager object
 	* @param \phpbb\path_helper					$path_helper	Path helper object
 	* @param \phpbb\template\template           $template       Template object
 	* @param \phpbb\user                        $user           User object
 	* @param string                             $root_path      phpBB root path
 	* @param string                             $php_ext        phpEx
 	* @param string								$flags_table	Name of the table used to store flag data
-	* @param \rmcgirr83\nationalflags\core\nationalflags	$functions	functions to be used by class
+	* @param \rmcgirr83\nationalflags\core\nationalflags	$nationalflags	methods to be used by class
+	* @param \phpbb\files\factory				$files_factory	File classes factory
 	* @access public
 	*/
 	public function __construct(
 			\phpbb\auth\auth $auth,
-			\phpbb\cache\service $cache,
 			\phpbb\config\config $config,
 			\phpbb\db\driver\driver_interface $db,
 			\phpbb\pagination $pagination,
@@ -101,10 +102,10 @@ class main_controller
 			$root_path,
 			$php_ext,
 			$flags_table,
-			\rmcgirr83\nationalflags\core\nationalflags $functions)
+			\rmcgirr83\nationalflags\core\nationalflags $nationalflags,
+			\phpbb\files\factory $files_factory = null)
 	{
 		$this->auth = $auth;
-		$this->cache = $cache;
 		$this->config = $config;
 		$this->db = $db;
 		$this->pagination = $pagination;
@@ -117,7 +118,8 @@ class main_controller
 		$this->root_path = $root_path;
 		$this->php_ext = $php_ext;
 		$this->flags_table = $flags_table;
-		$this->functions = $functions;
+		$this->nationalflags = $nationalflags;
+		$this->files_factory = $files_factory;
 
 		$this->ext_path = $this->ext_manager->get_extension_path('rmcgirr83/nationalflags', true);
 	}
@@ -125,15 +127,14 @@ class main_controller
 	/**
 	 * Display the flags page
 	 *
-	 * @return \Symfony\Component\HttpFoundation\Response A Symfony Response object
 	 * @access public
 	 */
 	public function displayFlags()
 	{
-		// When flags are disabled, redirect users back to the forum index
-		if (empty($this->config['allow_flags']))
+		// If setting in ACP is set to not allow guests and bots to view the flags
+		if (!$this->nationalflags->display_flags_on_forum())
 		{
-			redirect(append_sid("{$this->root_path}index.{$this->php_ext}"));
+			throw new http_exception(401, 'NOT_AUTHORISED');
 		}
 
 		//let's get the flags
@@ -155,7 +156,7 @@ class main_controller
 			$users_count = $users_count + $user_count;
 			$user_flag_count = $this->user->lang('FLAG_USERS', (int) $user_count);
 
-			$flag_image = $this->functions->get_user_flag($row['flag_id']);
+			$flag_image = $this->nationalflags->get_user_flag($row['flag_id']);
 
 			$this->template->assign_block_vars('flag', array(
 				'FLAG' 				=> $flag_image,
@@ -172,6 +173,7 @@ class main_controller
 		$this->template->assign_vars(array(
 			'L_FLAGS'	=> $countries . '&nbsp;&nbsp;' . $flag_users,
 			'S_FLAGS'		=> true,
+			'PHPBB_IS_32'	=> ($this->files_factory !== null) ? true : false,
 		));
 
 		// Assign breadcrumb template vars for the flags page
@@ -189,23 +191,22 @@ class main_controller
 	 *
 	 * @param $flag_id	int		the id of the flag
 	 * @param $page		int		page number we are on
-	 * @return \Symfony\Component\HttpFoundation\Response A Symfony Response object
 	 * @access public
 	 */
 	public function getFlags($flag_id, $page = 0)
 	{
-		// When flags are disabled, redirect users back to the forum index
-		if (empty($this->config['allow_flags']))
+		// If setting in ACP is set to not allow guests and bots to view the flags
+		if (!$this->nationalflags->display_flags_on_forum())
 		{
-			redirect(append_sid("{$this->root_path}index.{$this->php_ext}"));
+			throw new http_exception(401, 'NOT_AUTHORISED');
 		}
 
-		$flags = $this->cache->get('_user_flags');
+		$flags = $this->nationalflags->get_flag_cache();
 
 		// ensure our flag id passed actually exists in the cache
 		if (!isset($flags[$flag_id]))
 		{
-			throw new \RunTimeException($this->user->lang('FLAG_NOT_EXIST'));
+			throw new http_exception(404, 'FLAG_NOT_EXIST');
 		}
 
 		$flag_name = $flags[$flag_id]['flag_name'];
@@ -224,7 +225,7 @@ class main_controller
 	/**
 	 * Display flag
 	 *
-	 * @param $flag_id	int		the id of the flag
+	 * @param $flag_id		int		the id of the flag
 	 * @param $start		int		page number we start at
 	 * @param $limit		int		limit to display for pagination
 	 * @return null
@@ -232,19 +233,10 @@ class main_controller
 	 */
 	protected function display_flag($flag_id, $start, $limit)
 	{
-
-		//let's get the flag requested
-		$sql = 'SELECT flag_id, flag_name, flag_image
-			FROM ' . $this->flags_table . '
-			WHERE flag_id = ' . (int) $flag_id;
-		$result = $this->db->sql_query($sql);
-		$row = $this->db->sql_fetchrow($result);
-		$this->db->sql_freeresult($result);
-
-		// now users that have the flag
+		// Get users that have the flag
 		$sql = 'SELECT *
 			FROM ' . USERS_TABLE . '
-			WHERE user_flag = ' . (int) $row['flag_id'] . '
+			WHERE user_flag = ' . (int) $flag_id . '
 				AND ' . $this->db->sql_in_set('user_type', array(USER_NORMAL, USER_FOUNDER)) . '
 			ORDER BY username_clean';
 		$result = $this->db->sql_query_limit($sql, $limit, $start);
@@ -254,7 +246,7 @@ class main_controller
 		// for counting of total flag users
 		$result = $this->db->sql_query($sql);
 		$row2 = $this->db->sql_fetchrowset($result);
-		$total_users = (int) count($row2);
+		$total_users = (int) sizeof($row2);
 		$this->db->sql_freeresult($result);
 		unset($row2);
 
@@ -263,12 +255,14 @@ class main_controller
 			$user_id = $userrow['user_id'];
 
 			$username = ($this->auth->acl_get('u_viewprofile')) ? get_username_string('full', $user_id, $userrow['username'], $userrow['user_colour']) : get_username_string('no_profile', $user_id, $userrow['username'], $userrow['user_colour']);
+			$user_avatar = ($this->user->optionget('viewavatars')) ? phpbb_get_user_avatar($this->avatar_img_resize($userrow)) : '';
 
 			$this->template->assign_block_vars('user_row', array(
 				'JOINED'		=> $this->user->format_date($userrow['user_regdate']),
 				'VISITED'		=> (empty($userrow['user_lastvisit'])) ? ' - ' : $this->user->format_date($userrow['user_lastvisit']),
 				'POSTS'			=> ($userrow['user_posts']) ? $userrow['user_posts'] : 0,
 				'USERNAME_FULL'		=> $username,
+				'USER_AVATAR'		=> $user_avatar,
 				'U_SEARCH_USER'		=> ($this->auth->acl_get('u_search')) ? append_sid("{$this->root_path}search.$this->php_ext", "author_id=$user_id&amp;sr=posts") : '',
 			));
 		}
@@ -283,20 +277,25 @@ class main_controller
 			),
 		), 'pagination', 'page', $total_users, $limit, $start);
 
-		$flag_image = $this->functions->get_user_flag($row['flag_id']);
+		$flag_image = $this->nationalflags->get_user_flag((int) $flag_id);
 
 		$users_count = $total_users;
 
 		$total_users = $this->user->lang('FLAG_USERS', (int) $total_users);
 
+		$flags_array = $this->nationalflags->get_flag_cache();
+
+		$flag_name = isset($this->user->lang[strtoupper(str_replace(" ", "_", $flags_array[$flag_id]['flag_name']))]) ? html_entity_decode($this->user->lang[strtoupper(str_replace(" ", "_", $flags_array[$flag_id]['flag_name']))]) : html_entity_decode($flags_array[$flag_id]['flag_name']);
+
 		$this->template->assign_vars(array(
-			'FLAG'			=> html_entity_decode($row['flag_name']),
+			'FLAG'			=> $flag_name,
 			'FLAG_IMAGE'	=> $flag_image,
 			'TOTAL_USERS'	=> $total_users,
 			'S_VIEWONLINE'	=> $this->auth->acl_get('u_viewonline'),
 			'S_FLAGS'		=> true,
 			'S_FLAG_USERS'	=> (!empty($users_count)) ? true : false,
 			'MESSAGE_TEXT'	=> (empty($users_count)) ? $this->user->lang['NO_USER_HAS_FLAG'] : '',
+			'PHPBB_IS_32'	=> ($this->files_factory !== null) ? true : false,
 		));
 
 		// Assign breadcrumb template vars for the flags page
@@ -305,43 +304,50 @@ class main_controller
 			'FORUM_NAME'		=> $this->user->lang('NATIONAL_FLAGS'),
 		));
 
+		$flag_name = isset($this->user->lang[strtoupper(str_replace(" ", "_", $flags_array[$flag_id]['flag_name']))]) ? html_entity_decode($this->user->lang[strtoupper(str_replace(" ", "_", $flags_array[$flag_id]['flag_name']))]) : html_entity_decode($flags_array[$flag_id]['flag_name']);
 		// Assign breadcrumb template vars for the flags page
 		$this->template->assign_block_vars('navlinks', array(
 			'U_VIEW_FORUM'		=> $this->helper->route('rmcgirr83_nationalflags_getflags', array('flag_id' => $flag_id)),
-			'FORUM_NAME'		=> $row['flag_name'],
+			'FORUM_NAME'		=> $flag_name,
 		));
 	}
 
-	/**
-	 * Display flag on change in ucp
-	 * Ajax function
-	 * @param $flag_id
-	 *
-	 * @return \Symfony\Component\HttpFoundation\Response
-	 */
-	public function getFlag($flag_id)
+	/* Generate and resize avatar
+	* from last post avatar extension
+	*/
+	private function avatar_img_resize($avatar)
 	{
-		if (empty($flag_id))
+		if (!empty($avatar['user_avatar']))
 		{
-			if ($this->config['flags_required'])
+			if ($avatar['user_avatar_width'] >= $avatar['user_avatar_height'])
 			{
-				return new Response($this->user->lang['MUST_CHOOSE_FLAG']);
+				$avatar_width = ($avatar['user_avatar_width'] > self::MAX_SIZE) ? self::MAX_SIZE : $avatar['user_avatar_width'];
+				if ($avatar_width == self::MAX_SIZE)
+				{
+					$avatar['user_avatar_height'] = round(self::MAX_SIZE/$avatar['user_avatar_width']*$avatar['user_avatar_height']);
+				}
+				$avatar['user_avatar_width'] = $avatar_width;
 			}
 			else
 			{
-				return new Response($this->user->lang['NO_SUCH_FLAG']);
+				$avatar_height = ($avatar['user_avatar_height'] > self::MAX_SIZE) ? self::MAX_SIZE : $avatar['user_avatar_height'];
+				if ($avatar_height == self::MAX_SIZE)
+				{
+					$avatar['user_avatar_width'] = round(self::MAX_SIZE/$avatar['user_avatar_height']*$avatar['user_avatar_width']);
+				}
+				$avatar['user_avatar_height'] = $avatar_height;
 			}
 		}
-
-		$flags = $this->cache->get('_user_flags');
-
-		$flag_img = $this->ext_path . 'flags/' . strtolower($flags[$flag_id]['flag_image']);
-		$flag_img = str_replace('./', generate_board_url() . '/', $flag_img); //fix paths
-
-		$flag_name = $flags[$flag_id]['flag_name'];
-
-		$return = '<img class="flag_image" src="' . $flag_img . '" alt="' . $flag_name . '" title="' . $flag_name . '" />';
-
-		return new Response($return);
+		else
+		{
+			$no_avatar = "{$this->path_helper->get_web_root_path()}styles/" . rawurlencode($this->user->style['style_path']) . '/theme/images/no_avatar.gif';
+			$avatar = array(
+				'user_avatar' => $no_avatar,
+				'user_avatar_type' => AVATAR_REMOTE,
+				'user_avatar_width' => self::MAX_SIZE,
+				'user_avatar_height' => self::MAX_SIZE,
+			);
+		}
+		return $avatar;
 	}
 }

@@ -2,6 +2,12 @@
 .gitignore export-ignore
 .travis.yml export-ignore
 .editorconfig export-ignore
+travis export-ignore
+*README.MD export-ignore
+phpunit.xml.* export-ignore
+index_page.jpg export-ignore
+all_flags_of_users.jpg export-ignore
+users_of_flag.jpg export-ignore
 
 # Auto detect text files and perform LF normalization
 * text=false

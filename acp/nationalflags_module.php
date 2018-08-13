@@ -21,6 +21,9 @@ class nationalflags_module
 		// Get an instance of the admin controller
 		$admin_controller = $phpbb_container->get('rmcgirr83.nationalflags.admin.controller');
 
+		$user->add_lang_ext('rmcgirr83/nationalflags', array('nationalflags_acp', 'common'));
+		$user->add_lang('posting');
+
 		// Requests
 		$action = $request->variable('action', '');
 		$flag_id = $request->variable('flag_id', 0);
